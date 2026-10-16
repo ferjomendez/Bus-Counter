@@ -23,6 +23,7 @@ firmware/include/secrets.h
 *.db-wal
 *.db-shm
 broker/*.log
+broker/data/
 server/data/
 
 # PlatformIO

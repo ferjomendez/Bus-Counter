@@ -1,0 +1,11 @@
+# Permisos de los buses: el usuario MQTT debe llamarse igual que el ID del bus
+# (B01, B02, ...). %u se reemplaza por el nombre de usuario.
+pattern write buses/%u/event
+pattern write buses/%u/count
+pattern write buses/%u/status
+pattern read buses/%u/cmd
+
+# Servidor / dashboard: lee todo y puede mandar comandos a cualquier bus
+user servidor
+topic read buses/#
+topic write buses/+/cmd
