@@ -206,6 +206,26 @@ function Confirm-Mosquitto {
     return $null
 }
 
+# ---------------------------------------------------------------- Rutas largas
+
+# Windows limita las rutas a 260 caracteres salvo que se activen las rutas largas.
+# PlatformIO trae archivos con rutas internas de ~110 caracteres, asi que una carpeta
+# de proyecto muy profunda hace fallar la instalacion de paquetes.
+$MaxSafeRootLength = 120
+
+function Test-LongPathRisk([string]$Root) {
+    if ($Root.Length -le $MaxSafeRootLength) { return $false }
+    $enabled = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -ErrorAction SilentlyContinue).LongPathsEnabled
+    return ($enabled -ne 1)
+}
+
+function Show-LongPathHelp([string]$Root) {
+    Write-Warn "La carpeta del proyecto tiene una ruta muy larga ($($Root.Length) caracteres) y Windows no tiene activadas las rutas largas."
+    Write-Host '  Mueve el proyecto a una carpeta mas corta, por ejemplo C:\Bus-Counter o tu carpeta de usuario,'
+    Write-Host '  y vuelve a ejecutar el instalador. Tambien puedes activar las rutas largas de Windows:'
+    Write-Host '  https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation'
+}
+
 # ---------------------------------------------------------------- Entorno virtual
 
 function Confirm-Venv([string]$Root, $Py) {
@@ -251,6 +271,7 @@ function Confirm-Venv([string]$Root, $Py) {
             Add-Result 'Paquetes Python' 'requirements.txt' 'instalada'
         } else {
             Add-Result 'Paquetes Python' 'requirements.txt' 'fallo'
+            if (Test-LongPathRisk $Root) { Show-LongPathHelp $Root }
         }
     }
 
@@ -351,6 +372,7 @@ function Invoke-Main {
     Write-Step "Proyecto en $root"
     if ($CheckOnly) { Write-Host '(modo -CheckOnly: no se instala nada)' }
     if (-not (Test-Winget)) { Show-WingetHelp }
+    if (Test-LongPathRisk $root) { Show-LongPathHelp $root }
 
     [void](Confirm-Git)
     $py = Confirm-Python
