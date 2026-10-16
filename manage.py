@@ -28,7 +28,10 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
+import urllib.request
 import venv
+import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -468,6 +471,141 @@ def cmd_broker(_args: argparse.Namespace) -> int:
         return 0
 
 
+# ------------------------------------------------------------------ servidor y arranque completo
+
+SERVER_DIR = ROOT / "server"
+SIM_DIR = ROOT / "simulator"
+
+
+def server_command() -> list[str]:
+    return [sys.executable, "-m", "app.main"]
+
+
+def sim_command(extra: list[str] | None = None) -> list[str]:
+    return [sys.executable, "-m", "simulator", *(extra or [])]
+
+
+def wait_until(check, timeout_s: float, procs: list | None = None) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if check():
+            return True
+        if procs and any(p.poll() is not None for _, p in procs):
+            return False
+        time.sleep(0.3)
+    return False
+
+
+def http_ok(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=1) as r:
+            return r.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def stop_all(procs: list) -> None:
+    # Con Ctrl+C los procesos hijos ya reciben la senal; se espera un poco y luego se cierran
+    for name, p in reversed(procs):
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        except KeyboardInterrupt:
+            p.kill()
+
+
+def tail(path: Path, n: int = 15) -> str:
+    try:
+        return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
+    except OSError:
+        return ""
+
+
+def cmd_server(_args: argparse.Namespace) -> int:
+    reexec_in_venv()
+    env = ensure_env()
+    ensure_certs(env)
+    port = int(env.get("SERVER_PORT", "8000"))
+    if port_in_use(port):
+        sys.exit(f"El puerto {port} ya esta en uso. Hay otro servidor encendido?")
+    info(f"Servidor web en http://localhost:{port} (Ctrl+C para detener)")
+    try:
+        return subprocess.call(server_command(), cwd=SERVER_DIR)
+    except KeyboardInterrupt:
+        return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    reexec_in_venv()
+    env = prepare_broker()
+    mqtt_port = int(env.get("MQTT_PORT", "8883"))
+    web_port = int(env.get("SERVER_PORT", "8000"))
+    for port, what in ((mqtt_port, "broker"), (web_port, "servidor web")):
+        if port_in_use(port):
+            sys.exit(f"El puerto {port} ({what}) ya esta en uso. Ya esta encendido Bus Counter en otra ventana?")
+    if args.sim and not (SIM_DIR / "__main__.py").exists():
+        warn("El simulador todavia no existe (fase 3). Se enciende sin simulador.")
+        args.sim = False
+
+    procs: list[tuple[str, subprocess.Popen]] = []
+    broker_log_path = BROKER_DIR / "mosquitto.log"
+    broker_log = open(broker_log_path, "w", encoding="utf-8")
+    try:
+        info("Encendiendo broker MQTT...")
+        procs.append(("broker", subprocess.Popen(broker_command(), cwd=BROKER_DIR,
+                                                 stdout=broker_log, stderr=subprocess.STDOUT)))
+        if not wait_until(lambda: port_in_use(mqtt_port), 15, procs):
+            print(tail(broker_log_path))
+            raise RuntimeError("El broker no arranco. Arriba esta su registro.")
+
+        info("Encendiendo servidor web...")
+        procs.append(("servidor", subprocess.Popen(server_command(), cwd=SERVER_DIR)))
+        if not wait_until(lambda: http_ok(f"http://127.0.0.1:{web_port}/api/health"), 30, procs):
+            raise RuntimeError("El servidor web no arranco. Revisa los mensajes de arriba.")
+
+        if args.sim:
+            info("Encendiendo simulador...")
+            procs.append(("simulador", subprocess.Popen(sim_command(), cwd=ROOT)))
+
+        url = f"http://localhost:{web_port}"
+        ip = advertised_ip(env)
+        print()
+        print("  Bus Counter esta encendido.")
+        print(f"  En este computador:     {url}")
+        print(f"  Desde otros equipos:    http://{ip}:{web_port}  (misma red WiFi)")
+        print(f"  Broker para los buses:  {ip}:{mqtt_port}")
+        print(f"  Registro del broker:    {broker_log_path}")
+        print("  Para apagar: Ctrl+C")
+        print()
+        if not args.no_browser:
+            webbrowser.open(url)
+
+        while True:
+            for name, p in procs:
+                if p.poll() is not None:
+                    raise RuntimeError(f"El proceso '{name}' se detuvo (codigo {p.returncode}).")
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print()
+        info("Apagando...")
+        stop_all(procs)
+        return 0
+    except RuntimeError as e:
+        warn(str(e))
+        for _, p in procs:
+            if p.poll() is None:
+                p.terminate()
+        stop_all(procs)
+        return 1
+    finally:
+        broker_log.close()
+
+
 # ------------------------------------------------------------------ test
 
 def cmd_test(args: argparse.Namespace) -> int:
@@ -501,10 +639,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("start", help="enciende broker + servidor")
     s.add_argument("--sim", action="store_true", help="enciende tambien el simulador")
-    s.set_defaults(func=not_yet("fase 2"))
+    s.add_argument("--no-browser", action="store_true", help="no abre el navegador")
+    s.set_defaults(func=cmd_start)
 
     sub.add_parser("broker", help="enciende solo el broker").set_defaults(func=cmd_broker)
-    sub.add_parser("server", help="enciende solo el servidor").set_defaults(func=not_yet("fase 2"))
+    sub.add_parser("server", help="enciende solo el servidor").set_defaults(func=cmd_server)
     sub.add_parser("sim", help="enciende solo el simulador").set_defaults(func=not_yet("fase 3"))
     sub.add_parser("flash", help="graba el firmware").set_defaults(func=not_yet("fase 5"))
 
@@ -517,6 +656,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     if sys.version_info[:2] < MIN_PYTHON:
         sys.exit(f"Se necesita Python 3.10 o superior (tienes {platform.python_version()}).")
+    sys.stdout.reconfigure(line_buffering=True)  # que los mensajes salgan al tiro aunque se redirija
     args = build_parser().parse_args()
     return args.func(args)
 
