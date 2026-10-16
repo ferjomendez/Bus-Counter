@@ -31,7 +31,8 @@ fi
 # Certificado del servidor con la IP, 127.0.0.1 y localhost en el SAN
 openssl genrsa -out server.key 2048
 openssl req -new -key server.key -subj "/CN=$IP" -out server.csr
-printf "subjectAltName=IP:%s,IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth\n" "$IP" > san.ext
+# La IP va tambien como DNS: mbedTLS 2.x (ESP32) solo compara nombres DNS del SAN
+printf "subjectAltName=IP:%s,IP:127.0.0.1,DNS:localhost,DNS:%s,DNS:127.0.0.1\nextendedKeyUsage=serverAuth\n" "$IP" "$IP" > san.ext
 openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out server.crt -days 825 -sha256 -extfile san.ext
 

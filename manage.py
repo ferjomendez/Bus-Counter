@@ -352,6 +352,8 @@ def generate_server_cert(certs_dir: Path, ip: str) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     ips = {ip, "127.0.0.1"}
     san = [x509.IPAddress(ipaddress.ip_address(i)) for i in sorted(ips)] + [x509.DNSName("localhost")]
+    # mbedTLS 2.x (ESP32) solo compara nombres DNS del SAN: la IP va tambien como nombre
+    san += [x509.DNSName(i) for i in sorted(ips)]
     now = dt.datetime.now(dt.timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -614,20 +616,58 @@ def cmd_start(args: argparse.Namespace) -> int:
         broker_log.close()
 
 
+# ------------------------------------------------------------------ firmware
+
+FIRMWARE_DIR = ROOT / "firmware"
+FW_CONFIG = FIRMWARE_DIR / "include" / "config.h"
+FW_CONFIG_EXAMPLE = FIRMWARE_DIR / "include" / "config.example.h"
+
+
+def pio_command() -> list[str]:
+    exe = VENV_DIR / ("Scripts/pio.exe" if IS_WINDOWS else "bin/pio")
+    if exe.exists():
+        return [str(exe)]
+    return [sys.executable, "-m", "platformio"]
+
+
+def cmd_flash(args: argparse.Namespace) -> int:
+    reexec_in_venv()
+    if not FW_CONFIG.exists():
+        shutil.copyfile(FW_CONFIG_EXAMPLE, FW_CONFIG)
+        print(f"Se creo {FW_CONFIG}.")
+        print("Editalo: pon el ID del bus (BUS_ID) y el nombre y clave del WiFi, y vuelve a ejecutar este comando.")
+        return 1
+    text = FW_CONFIG.read_text(encoding="utf-8")
+    if '"nombre-de-la-red"' in text:
+        warn("config.h todavia tiene el WiFi de ejemplo. El bus no podra conectarse hasta que lo cambies.")
+    env = ensure_env()
+    ensure_certs(env)
+    cmd = [*pio_command(), "run", "-e", "esp32dev"]
+    if not args.build_only:
+        cmd += ["-t", "upload"]
+        if args.port:
+            cmd += ["--upload-port", args.port]
+    info("Compilando firmware" + ("" if args.build_only else " y grabando el ESP32") + "...")
+    rc = subprocess.call(cmd, cwd=FIRMWARE_DIR)
+    if rc != 0:
+        return rc
+    if args.monitor and not args.build_only:
+        info("Monitor serie (Ctrl+C para salir)")
+        try:
+            return subprocess.call([*pio_command(), "device", "monitor", "-b", "115200"], cwd=FIRMWARE_DIR)
+        except KeyboardInterrupt:
+            return 0
+    return 0
+
+
 # ------------------------------------------------------------------ test
 
 def cmd_test(args: argparse.Namespace) -> int:
     reexec_in_venv()
+    if args.firmware:
+        # Tests nativos de la logica de conteo: necesitan un compilador C++ (g++) en el PC
+        return subprocess.call([*pio_command(), "test", "-e", "native"], cwd=FIRMWARE_DIR)
     return subprocess.call([sys.executable, "-m", "pytest", "-q", "server/tests", "broker/tests", "simulator/tests", *args.pytest_args], cwd=ROOT)
-
-
-# ------------------------------------------------------------------ pendientes
-
-def not_yet(phase: str):
-    def run(_args: argparse.Namespace) -> int:
-        print(f"Este comando se completa en la {phase}.")
-        return 1
-    return run
 
 
 # ------------------------------------------------------------------ main
@@ -656,9 +696,14 @@ def build_parser() -> argparse.ArgumentParser:
                        add_help=False)
     s.add_argument("sim_args", nargs=argparse.REMAINDER)
     s.set_defaults(func=cmd_sim)
-    sub.add_parser("flash", help="graba el firmware").set_defaults(func=not_yet("fase 5"))
+    s = sub.add_parser("flash", help="compila y graba el firmware en el ESP32")
+    s.add_argument("--port", help="puerto serie del ESP32 (por ejemplo COM5); por defecto se detecta solo")
+    s.add_argument("--build-only", action="store_true", help="solo compila, no graba")
+    s.add_argument("--monitor", action="store_true", help="abre el monitor serie despues de grabar")
+    s.set_defaults(func=cmd_flash)
 
     s = sub.add_parser("test", help="ejecuta las pruebas")
+    s.add_argument("--firmware", action="store_true", help="tests nativos del firmware (necesita g++)")
     s.add_argument("pytest_args", nargs=argparse.REMAINDER)
     s.set_defaults(func=cmd_test)
     return p
