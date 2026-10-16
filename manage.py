@@ -540,6 +540,14 @@ def cmd_server(_args: argparse.Namespace) -> int:
         return 0
 
 
+def cmd_sim(args: argparse.Namespace) -> int:
+    reexec_in_venv()
+    try:
+        return subprocess.call(sim_command(args.sim_args), cwd=ROOT)
+    except KeyboardInterrupt:
+        return 0
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     reexec_in_venv()
     env = prepare_broker()
@@ -610,7 +618,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 def cmd_test(args: argparse.Namespace) -> int:
     reexec_in_venv()
-    return subprocess.call([sys.executable, "-m", "pytest", "-q", "server/tests", "broker/tests", *args.pytest_args], cwd=ROOT)
+    return subprocess.call([sys.executable, "-m", "pytest", "-q", "server/tests", "broker/tests", "simulator/tests", *args.pytest_args], cwd=ROOT)
 
 
 # ------------------------------------------------------------------ pendientes
@@ -644,7 +652,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("broker", help="enciende solo el broker").set_defaults(func=cmd_broker)
     sub.add_parser("server", help="enciende solo el servidor").set_defaults(func=cmd_server)
-    sub.add_parser("sim", help="enciende solo el simulador").set_defaults(func=not_yet("fase 3"))
+    s = sub.add_parser("sim", help="enciende solo el simulador (opciones: python manage.py sim -h)",
+                       add_help=False)
+    s.add_argument("sim_args", nargs=argparse.REMAINDER)
+    s.set_defaults(func=cmd_sim)
     sub.add_parser("flash", help="graba el firmware").set_defaults(func=not_yet("fase 5"))
 
     s = sub.add_parser("test", help="ejecuta las pruebas")
@@ -657,6 +668,9 @@ def main() -> int:
     if sys.version_info[:2] < MIN_PYTHON:
         sys.exit(f"Se necesita Python 3.10 o superior (tienes {platform.python_version()}).")
     sys.stdout.reconfigure(line_buffering=True)  # que los mensajes salgan al tiro aunque se redirija
+    if sys.argv[1:2] == ["sim"]:
+        # Las opciones del simulador pasan tal cual (python manage.py sim --offline B04)
+        return cmd_sim(argparse.Namespace(sim_args=sys.argv[2:]))
     args = build_parser().parse_args()
     return args.func(args)
 

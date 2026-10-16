@@ -29,3 +29,6 @@ server/data/
 # PlatformIO
 firmware/.pio/
 firmware/.vscode/
+
+# Simulador
+simulator/state.json
