@@ -1,0 +1,30 @@
+# Entorno local
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+local_config.json
+
+# Material de referencia (no se versiona)
+referencia/
+
+# Secretos: nunca a git
+.env
+broker/certs/
+broker/passwd
+*.key
+*.pem
+firmware/include/config.h
+firmware/include/secrets.h
+
+# Datos y logs
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+broker/*.log
+server/data/
+
+# PlatformIO
+firmware/.pio/
+firmware/.vscode/
