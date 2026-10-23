@@ -2,6 +2,7 @@
 """CLI de Bus Counter.
 
 Uso:  python manage.py <comando> [opciones]
+      (correr desde la raiz del proyecto)
 
   setup   instala dependencias (en Windows llama a setup.ps1)
   certs   genera certificados TLS (--force para regenerar)
